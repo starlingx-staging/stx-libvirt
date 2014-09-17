@@ -1185,6 +1185,11 @@ virHostCPUGetKVMMaxVCPUs(void)
         return -1;
     }
 
+/* Ignore KVM_CAP_MAX_VCPUS on RHEL - the recommended maximum
+ * is treated as a hard limit.
+ */
+#undef KVM_CAP_MAX_VCPUS
+
 # ifdef KVM_CAP_MAX_VCPUS
     /* at first try KVM_CAP_MAX_VCPUS to determine the maximum count */
     if ((ret = ioctl(fd, KVM_CHECK_EXTENSION, KVM_CAP_MAX_VCPUS)) > 0)
