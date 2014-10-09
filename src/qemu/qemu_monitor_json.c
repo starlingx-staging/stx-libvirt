@@ -767,7 +767,7 @@ qemuMonitorJSONHandleIOError(qemuMonitorPtr mon, virJSONValuePtr data)
     const char *device;
     const char *nodename;
     const char *action;
-    const char *reason = "";
+    const char *reason;
     bool nospc = false;
     int actionID;
 
@@ -785,8 +785,14 @@ qemuMonitorJSONHandleIOError(qemuMonitorPtr mon, virJSONValuePtr data)
 
     nodename = virJSONValueObjectGetString(data, "node-name");
 
-    if (virJSONValueObjectGetBoolean(data, "nospace", &nospc) == 0 && nospc)
-        reason = "enospc";
+    reason = virJSONValueObjectGetString(data, "__com.redhat_reason");
+    if (!reason) {
+        if (virJSONValueObjectGetBoolean(data, "nospace", &nospc) != 0) {
+            VIR_WARN("neither __com.redhat_reason nor nospace found in disk "
+                     "io error event");
+        }
+        reason = nospc ? "enospc" : "";
+    }
 
     if ((actionID = qemuMonitorIOErrorActionTypeFromString(action)) < 0) {
         VIR_WARN("unknown disk io error action '%s'", action);
