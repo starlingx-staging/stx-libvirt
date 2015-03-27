@@ -6793,6 +6793,8 @@ qemuBuildCpuModelArgStr(virQEMUDriverPtr driver,
     int ret = -1;
     size_t i;
     virCapsPtr caps = NULL;
+    bool hle = false;
+    bool rtm = false;
     virCPUDefPtr cpu = def->cpu;
 
     if (!(caps = virQEMUDriverGetCapabilities(driver, false)))
@@ -6864,6 +6866,11 @@ qemuBuildCpuModelArgStr(virQEMUDriverPtr driver,
         case VIR_CPU_FEATURE_FORBID:
             if (virQEMUCapsGet(qemuCaps, QEMU_CAPS_QUERY_CPU_MODEL_EXPANSION))
                 virBufferAsprintf(buf, ",%s=off", cpu->features[i].name);
+            if (STREQ("rtm", cpu->features[i].name))
+                rtm = true;
+            if (STREQ("hle", cpu->features[i].name))
+                hle = true;
+
             else
                 virBufferAsprintf(buf, ",-%s", cpu->features[i].name);
             break;
@@ -6871,6 +6878,20 @@ qemuBuildCpuModelArgStr(virQEMUDriverPtr driver,
         case VIR_CPU_FEATURE_OPTIONAL:
         case VIR_CPU_FEATURE_LAST:
             break;
+        }
+
+        /* Some versions of qemu-kvm in RHEL provide Broadwell and Haswell CPU
+         * models which lack rtm and hle features when used with some machine
+         * types. Let's make sure Broadwell and Haswell will always have these
+         * features. But only if the features were not explicitly mentioned in
+         * the guest CPU definition.
+         */
+        if (STREQ_NULLABLE(cpu->model, "Broadwell") ||
+            STREQ_NULLABLE(cpu->model, "Haswell")) {
+            if (!rtm)
+                virBufferAddLit(buf, ",+rtm");
+            if (!hle)
+                virBufferAddLit(buf, ",+hle");
         }
     }
 
