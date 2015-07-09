@@ -1633,6 +1633,7 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
     virDomainDiskDefPtr disk = NULL;
     virDomainHostdevDefPtr hostdev = NULL;
     char *sysfs_path = NULL;
+    char *hostdev_path = NULL;
     const char *path = NULL;
     int val = -1;
     int ret = -1;
@@ -1654,14 +1655,10 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
         if (!qemuIsSharedHostdev(hostdev))
             return 0;
 
-        if (hostdev->source.subsys.u.scsi.sgio) {
-            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                           _("'sgio' is not supported for SCSI "
-                             "generic device yet "));
+        if (!(hostdev_path = qemuGetHostdevPath(hostdev)))
             goto cleanup;
-        }
 
-        return 0;
+        path = hostdev_path;
     } else {
         return 0;
     }
@@ -1670,7 +1667,11 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
         goto cleanup;
 
     /* By default, filter the SG_IO commands, i.e. set unpriv_sgio to 0.  */
-    val = (disk->sgio == VIR_DOMAIN_DEVICE_SGIO_UNFILTERED);
+    if (dev->type == VIR_DOMAIN_DEVICE_DISK)
+        val = (disk->sgio == VIR_DOMAIN_DEVICE_SGIO_UNFILTERED);
+    else
+        val = (hostdev->source.subsys.u.scsi.sgio ==
+               VIR_DOMAIN_DEVICE_SGIO_UNFILTERED);
 
     /* Do not do anything if unpriv_sgio is not supported by the kernel and the
      * whitelist is enabled.  But if requesting unfiltered access, always call
@@ -1683,6 +1684,7 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
     ret = 0;
 
  cleanup:
+    VIR_FREE(hostdev_path);
     VIR_FREE(sysfs_path);
     return ret;
 }
