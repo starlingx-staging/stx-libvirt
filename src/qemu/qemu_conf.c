@@ -1473,6 +1473,8 @@ qemuAddSharedHostdev(virQEMUDriverPtr driver,
 {
     char *dev_path = NULL;
     char *key = NULL;
+    virDomainHostdevSubsysSCSIPtr scsisrc = &hostdev->source.subsys.u.scsi;
+    virDomainHostdevSubsysSCSIHostPtr scsihostsrc = &scsisrc->u.host;
     int ret = -1;
 
     if (!qemuIsSharedHostdev(hostdev))
@@ -1480,6 +1482,19 @@ qemuAddSharedHostdev(virQEMUDriverPtr driver,
 
     if (!(dev_path = qemuGetHostdevPath(hostdev)))
         goto cleanup;
+
+    if ((ret = qemuCheckUnprivSGIO(driver->sharedDevices, dev_path,
+                                   scsisrc->sgio)) < 0) {
+        if (ret == -2) {
+            virReportError(VIR_ERR_OPERATION_INVALID,
+                           _("sgio of shared scsi host device '%s-%u-%u-%llu' "
+                             "conflicts with other active domains"),
+                           scsihostsrc->adapter, scsihostsrc->bus,
+                           scsihostsrc->target, scsihostsrc->unit);
+            ret = -1;
+        }
+        goto cleanup;
+    }
 
     if (!(key = qemuGetSharedDeviceKey(dev_path)))
         goto cleanup;
