@@ -7803,7 +7803,7 @@ qemuDomainLogContextPtr qemuDomainLogContextNew(virQEMUDriverPtr driver,
         if (ctxt->writefd < 0)
             goto error;
     } else {
-        if ((ctxt->writefd = open(ctxt->path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)) < 0) {
+        if ((ctxt->writefd = open(ctxt->path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP)) < 0) {
             virReportSystemError(errno, _("failed to create logfile %s"),
                                  ctxt->path);
             goto error;
@@ -7826,7 +7826,7 @@ qemuDomainLogContextPtr qemuDomainLogContextNew(virQEMUDriverPtr driver,
         }
 
         if (mode == QEMU_DOMAIN_LOG_CONTEXT_MODE_START) {
-            if ((ctxt->readfd = open(ctxt->path, O_RDONLY, S_IRUSR | S_IWUSR)) < 0) {
+            if ((ctxt->readfd = open(ctxt->path, O_RDONLY, S_IRUSR | S_IWUSR | S_IRGRP)) < 0) {
                 virReportSystemError(errno, _("failed to open logfile %s"),
                                      ctxt->path);
                 goto error;
@@ -7976,7 +7976,7 @@ qemuDomainLogAppendMessage(virQEMUDriverPtr driver,
                                              vm->def->name, path, message, 0) < 0)
             goto cleanup;
     } else {
-        if ((writefd = open(path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)) < 0) {
+        if ((writefd = open(path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP)) < 0) {
             virReportSystemError(errno, _("failed to create logfile %s"),
                                  path);
             goto cleanup;
