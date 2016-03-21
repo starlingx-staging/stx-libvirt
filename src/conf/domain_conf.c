@@ -22181,25 +22181,6 @@ virDomainChannelDefCheckABIStability(virDomainChrDefPtr src,
 
 
 static bool
-virDomainConsoleDefCheckABIStability(virDomainChrDefPtr src,
-                                     virDomainChrDefPtr dst)
-{
-    if (src->targetType != dst->targetType) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
-                       _("Target console type %s does not match source %s"),
-                       virDomainChrConsoleTargetTypeToString(dst->targetType),
-                       virDomainChrConsoleTargetTypeToString(src->targetType));
-        return false;
-    }
-
-    if (!virDomainDeviceInfoCheckABIStability(&src->info, &dst->info))
-        return false;
-
-    return true;
-}
-
-
-static bool
 virDomainWatchdogDefCheckABIStability(virDomainWatchdogDefPtr src,
                                       virDomainWatchdogDefPtr dst)
 {
@@ -23174,10 +23155,14 @@ virDomainDefCheckABIStabilityFlags(virDomainDefPtr src,
         goto error;
     }
 
+    /* WRS - Disable this check since it is problematic.
+           - Note that disabling this check is not critical since
+             this section is regenerated at destination.
     for (i = 0; i < src->nconsoles; i++)
         if (!virDomainConsoleDefCheckABIStability(src->consoles[i],
                                                   dst->consoles[i]))
             goto error;
+    */
 
     if (src->nhubs != dst->nhubs) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
