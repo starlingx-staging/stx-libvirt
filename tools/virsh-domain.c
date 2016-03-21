@@ -81,6 +81,11 @@
     VIRSH_COMMON_OPT_CURRENT(N_("affect current domain"))
 
 
+static bool
+virshPrintPinInfo(vshControl *ctl,
+                  unsigned char *cpumap,
+                  size_t cpumaplen);
+
 static virDomainPtr
 virshDomainDefine(virConnectPtr conn, const char *xml, unsigned int flags)
 {
@@ -6814,7 +6819,13 @@ cmdVcpuinfo(vshControl *ctl, const vshCmd *cmd)
 
     for (n = 0; n < ncpus; n++) {
         vshPrint(ctl, "%-15s %d\n", _("VCPU:"), cpuinfo[n].number);
-        vshPrint(ctl, "%-15s %d\n", _("CPU:"), cpuinfo[n].cpu);
+        /* vcpuinfo pcpu becomes stale after scaling vcpu
+         * down.  Display cpumap/cpulist instead of last-run-cpu. */
+        vshPrint(ctl, "%-15s ", _("CPU:"));
+        ret = virshPrintPinInfo(ctl, VIR_GET_CPUMAP(cpumaps, cpumaplen, n),
+                              cpumaplen);
+        vshPrint(ctl, "\n");
+
         vshPrint(ctl, "%-15s %s\n", _("State:"),
                  virshDomainVcpuStateToString(cpuinfo[n].state));
         if (cpuinfo[n].cpuTime != 0) {
