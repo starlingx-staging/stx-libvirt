@@ -1590,7 +1590,7 @@ qemuMigrationSrcWaitForCompletion(virQEMUDriverPtr driver,
             }
         } else {
             /* Poll every 50ms for progress & to allow cancellation */
-            struct timespec ts = { .tv_sec = 0, .tv_nsec = 50 * 1000 * 1000ull };
+            struct timespec ts = { .tv_sec = 0, .tv_nsec = 10 * 1000 * 1000ull };
 
             virObjectUnlock(vm);
             nanosleep(&ts, NULL);
