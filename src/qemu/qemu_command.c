@@ -2155,6 +2155,33 @@ qemuBuildDiskDeviceStr(const virDomainDef *def,
     return NULL;
 }
 
+static int
+qemuBuildDpdkArgStr(virCommandPtr cmd,
+                    const virDomainDpdkParamsDefPtr dpdk)
+{
+    char *cpumask;
+
+    if (!dpdk) {
+        return 0;
+    }
+
+    cpumask = virBitmapToString(dpdk->cpumask, true, false);
+    if (!cpumask) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Unable to format DPDK cpumask as string"));
+        return -1;
+    }
+
+    virCommandAddArgFormat(cmd, "-c %s", cpumask);
+    virCommandAddArgFormat(cmd, "-n %u", dpdk->nchannels);
+    virCommandAddArgFormat(cmd, "--proc-type=%s", "secondary");
+    virCommandAddArgFormat(cmd, "--file-prefix=%s", dpdk->file_prefix);
+    virCommandAddArg(cmd, "--");
+    virCommandAddArg(cmd, "-enable-dpdk");
+    VIR_FREE(cpumask);
+
+    return 0;
+}
 
 static int
 qemuBuildFloppyCommandLineControllerOptions(virCommandPtr cmd,
@@ -10334,6 +10361,12 @@ qemuBuildCommandLine(virQEMUDriverPtr driver,
     cmd = virCommandNew(def->emulator);
 
     virCommandAddEnvPassCommon(cmd);
+
+    if (def->dpdk) {
+        if (qemuBuildDpdkArgStr(cmd, def->dpdk) < 0) {
+            goto error;
+        }
+    }
 
     if (qemuBuildNameCommandLine(cmd, cfg, def, qemuCaps) < 0)
         goto error;
