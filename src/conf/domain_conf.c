@@ -888,6 +888,11 @@ VIR_ENUM_IMPL(virDomainVsockModel, VIR_DOMAIN_VSOCK_MODEL_LAST,
               "default",
               "virtio")
 
+VIR_ENUM_IMPL(virDomainDpdkProcess, VIR_DOMAIN_DPDK_PROCTYPE_LAST,
+              "auto",
+              "primary",
+              "secondary")
+
 VIR_ENUM_IMPL(virDomainDiskDiscard, VIR_DOMAIN_DISK_DISCARD_LAST,
               "default",
               "unmap",
@@ -1227,6 +1232,103 @@ virBlkioDeviceArrayClear(virBlkioDevicePtr devices,
 
     for (i = 0; i < ndevices; i++)
         VIR_FREE(devices[i].path);
+}
+
+/**
+ * virDomainDpdkParamsDefPtr
+ *
+ * this function parses a XML node:
+ *
+ *   <dpdk>
+ *     <process type='secondary'/>
+ *     <file prefix='vs'/>
+ *     <memory channels='4'/>
+ *     <cpu list='0,2-3'/>
+ *   </dpdk>
+ *
+ * and fills a virDpdkParams struct.
+ */
+static int
+virDomainDpdkParamsParseXML(xmlNodePtr ctxt,
+                            virDomainDpdkParamsDefPtr dpdk)
+{
+    char *channels = NULL;
+    char *process_type = NULL;
+    char *file_prefix = NULL;
+    char *cpu_list = NULL;
+    xmlNodePtr cur;
+    int ret = -EINVAL;
+
+    cur = ctxt->children;
+    while (cur != NULL) {
+        if (cur->type == XML_ELEMENT_NODE) {
+            if (!process_type && xmlStrEqual(cur->name, BAD_CAST "process")) {
+                process_type = virXMLPropString(cur, "type");
+            }
+            if (!file_prefix && xmlStrEqual(cur->name, BAD_CAST "file")) {
+                file_prefix = virXMLPropString(cur, "prefix");
+            }
+            if (!cpu_list && xmlStrEqual(cur->name, BAD_CAST "cpu")) {
+                cpu_list = virXMLPropString(cur, "list");
+            }
+            if (!channels && xmlStrEqual(cur->name, BAD_CAST "memory")) {
+                channels = virXMLPropString(cur, "channels");
+            }
+        }
+        cur = cur->next;
+    }
+
+    if (!process_type) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("missing DPDK process type"));
+        goto error;
+    }
+    if (!file_prefix) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("missing DPDK file prefix"));
+        goto error;
+    }
+    if (!cpu_list) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("missing DPDK CPU list"));
+        goto error;
+    }
+    if (!channels) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("missing DPDK memory channel count"));
+        goto error;
+    }
+
+    dpdk->process_type = virDomainDpdkProcessTypeFromString(process_type);
+    if (virStrToLong_ui(channels, NULL, 10, &dpdk->nchannels) < 0) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("could not parse DPDK memory channels %s"),
+                       channels);
+        goto error;
+    }
+    if (virBitmapParse(cpu_list, &dpdk->cpumask, 128) < 0) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("could not parse DPDK CPU list %s"),
+                       cpu_list);
+        goto error;
+    }
+    if (VIR_STRDUP(dpdk->file_prefix, file_prefix) < 0) {
+        goto error;
+    }
+
+    ret = 0;
+
+cleanup:
+    VIR_FREE(process_type);
+    VIR_FREE(file_prefix);
+    VIR_FREE(cpu_list);
+    VIR_FREE(channels);
+
+    return ret;
+error:
+    virDomainDpdkParamsDefFree(dpdk);
+    ret = -EINVAL;
+    goto cleanup;
 }
 
 /**
@@ -2855,6 +2957,15 @@ virDomainIOThreadIDArrayHasPin(virDomainDefPtr def)
     return false;
 }
 
+void
+virDomainDpdkParamsDefFree(virDomainDpdkParamsDefPtr dpdk)
+{
+    if (!dpdk)
+        return;
+
+    virBitmapFree(dpdk->cpumask);
+    VIR_FREE(dpdk->file_prefix);
+}
 
 void
 virDomainIOThreadIDDefFree(virDomainIOThreadIDDefPtr def)
@@ -3006,6 +3117,9 @@ void virDomainDefFree(virDomainDefPtr def)
     for (i = 0; i < def->maxvcpus; i++)
         virDomainVcpuDefFree(def->vcpus[i]);
     VIR_FREE(def->vcpus);
+
+    virDomainDpdkParamsDefFree(def->dpdk);
+    VIR_FREE(def->dpdk);
 
     /* hostdevs must be freed before nets (or any future "intelligent
      * hostdevs") because the pointer to the hostdev is really
@@ -19794,6 +19908,14 @@ virDomainDefParseXML(xmlDocPtr xml,
     if (virXPathBoolean("boolean(./memoryBacking/discard)", ctxt))
         def->mem.discard = VIR_TRISTATE_BOOL_YES;
 
+    /* Extract dpdk parameters */
+    if ((node = virXPathNode("./dpdk", ctxt))) {
+        if (VIR_ALLOC(def->dpdk) < 0)
+            goto error;
+        if (virDomainDpdkParamsParseXML(node, def->dpdk) < 0)
+            goto error;
+    }
+
     /* Extract blkio cgroup tunables */
     if (virXPathUInt("string(./blkiotune/weight)", ctxt,
                      &def->blkio.weight) < 0)
@@ -27822,6 +27944,7 @@ virDomainDefFormatInternal(virDomainDefPtr def,
     unsigned char *uuid;
     char uuidstr[VIR_UUID_STRING_BUFLEN];
     const char *type = NULL;
+    char *cpu_list = NULL;
     int n;
     size_t i;
     virBuffer attributeBuf = VIR_BUFFER_INITIALIZER;
@@ -27869,6 +27992,27 @@ virDomainDefFormatInternal(virDomainDefPtr def,
 
     virBufferEscapeString(buf, "<description>%s</description>\n",
                           def->description);
+
+    if (def->dpdk) {
+        virBufferAsprintf(buf, "  <dpdk>\n");
+        if (!(type = virDomainDpdkProcessTypeToString(def->dpdk->process_type))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("unexpected DPDK process type %d"),
+                           def->dpdk->process_type);
+            goto error;
+        }
+        if (!(cpu_list = virBitmapFormat(def->dpdk->cpumask))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("unexpected CPU CPU list"));
+            goto error;
+        }
+        virBufferAsprintf(buf, "    <process type='%s'/>\n", type);
+        virBufferAsprintf(buf, "    <file prefix='%s'/>\n", def->dpdk->file_prefix);
+        virBufferAsprintf(buf, "    <cpu list='%s'/>\n", cpu_list);
+        virBufferAsprintf(buf, "    <memory channels='%u'/>\n", def->dpdk->nchannels);
+        virBufferAsprintf(buf, "  </dpdk>\n");
+        VIR_FREE(cpu_list);
+    }
 
     if (def->metadata) {
         xmlBufferPtr xmlbuf;
