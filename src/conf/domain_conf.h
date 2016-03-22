@@ -1958,6 +1958,23 @@ struct _virDomainOSDef {
     virDomainBIOSDef bios;
 };
 
+enum virDomainDpdkProcessType {
+    VIR_DOMAIN_DPDK_PROCTYPE_AUTO,
+    VIR_DOMAIN_DPDK_PROCTYPE_PRIMARY,
+    VIR_DOMAIN_DPDK_PROCTYPE_SECONDARY,
+
+    VIR_DOMAIN_DPDK_PROCTYPE_LAST
+};
+
+typedef struct _virDomainDpdkParamsDef virDomainDpdkParamsDef;
+typedef virDomainDpdkParamsDef *virDomainDpdkParamsDefPtr;
+struct _virDomainDpdkParamsDef {
+    enum virDomainDpdkProcessType process_type;
+    char *file_prefix;
+    unsigned nchannels;
+    virBitmapPtr cpumask;
+};
+
 typedef enum {
     VIR_DOMAIN_TIMER_NAME_PLATFORM = 0,
     VIR_DOMAIN_TIMER_NAME_PIT,
@@ -2401,6 +2418,8 @@ struct _virDomainDef {
     char *name;
     char *title;
     char *description;
+
+    virDomainDpdkParamsDefPtr dpdk;
 
     virDomainBlkiotune blkio;
     virDomainMemtune mem;
@@ -2851,6 +2870,7 @@ int virDomainObjWaitUntil(virDomainObjPtr vm,
 
 void virDomainPanicDefFree(virDomainPanicDefPtr panic);
 void virDomainResourceDefFree(virDomainResourceDefPtr resource);
+void virDomainDpdkParamsDefFree(virDomainDpdkParamsDefPtr dpdk);
 void virDomainGraphicsDefFree(virDomainGraphicsDefPtr def);
 const char *virDomainInputDefGetPath(virDomainInputDefPtr input);
 void virDomainInputDefFree(virDomainInputDefPtr def);
@@ -3448,6 +3468,7 @@ VIR_ENUM_DECL(virDomainRNGBackend)
 VIR_ENUM_DECL(virDomainTPMModel)
 VIR_ENUM_DECL(virDomainTPMBackend)
 VIR_ENUM_DECL(virDomainTPMVersion)
+VIR_ENUM_DECL(virDomainDpdkProcess)
 VIR_ENUM_DECL(virDomainMemoryModel)
 VIR_ENUM_DECL(virDomainMemoryBackingModel)
 VIR_ENUM_DECL(virDomainMemorySource)
