@@ -2983,8 +2983,10 @@ qemuMonitorDriveDel(qemuMonitorPtr mon,
 
     QEMU_CHECK_MONITOR(mon);
 
-    /* there won't be a direct replacement for drive_del in QMP */
-    return qemuMonitorTextDriveDel(mon, drivestr);
+    if (mon->json)
+        return qemuMonitorJSONDriveDel(mon, drivestr);
+    else
+        return qemuMonitorTextDriveDel(mon, drivestr);
 }
 
 
@@ -3184,8 +3186,10 @@ qemuMonitorAddDrive(qemuMonitorPtr mon,
 
     QEMU_CHECK_MONITOR(mon);
 
-    /* there won't ever be a direct QMP replacement for this function */
-    return qemuMonitorTextAddDrive(mon, drivestr);
+    if (mon->json)
+        return qemuMonitorJSONAddDrive(mon, drivestr);
+    else
+        return qemuMonitorTextAddDrive(mon, drivestr);
 }
 
 

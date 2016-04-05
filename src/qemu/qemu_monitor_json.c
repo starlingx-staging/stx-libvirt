@@ -2920,6 +2920,112 @@ int qemuMonitorJSONEjectMedia(qemuMonitorPtr mon,
 }
 
 
+int qemuMonitorJSONAddDrive(qemuMonitorPtr mon,
+                            const char *drivestr)
+{
+    int ret = -1;
+    virJSONValuePtr cmd;
+    virJSONValuePtr reply = NULL;
+    virJSONValuePtr args;
+
+    cmd = qemuMonitorJSONMakeCommand("__com.redhat_drive_add",
+                                     NULL);
+    if (!cmd)
+        return -1;
+
+    args = qemuMonitorJSONKeywordStringToJSON(drivestr, "type");
+    if (!args)
+        goto cleanup;
+
+    /* __com.redhat_drive_add rejects the 'if' key */
+    virJSONValueObjectRemoveKey(args, "if", NULL);
+
+    if (virJSONValueObjectAppend(cmd, "arguments", args) < 0) {
+        virReportOOMError();
+        goto cleanup;
+    }
+    args = NULL; /* cmd owns reference to args now */
+
+    if ((ret = qemuMonitorJSONCommand(mon, cmd, &reply)) < 0)
+        goto cleanup;
+
+    if (qemuMonitorJSONHasError(reply, "CommandNotFound")) {
+        virJSONValueFree(cmd);
+        virJSONValueFree(reply);
+        cmd = reply = NULL;
+
+        VIR_DEBUG("__com.redhat_drive_add command not found,"
+                  " trying upstream way");
+    } else {
+        ret = qemuMonitorJSONCheckError(cmd, reply);
+        goto cleanup;
+    }
+
+    /* Upstream approach */
+    /* there won't be a direct replacement for drive_add in QMP */
+    ret = qemuMonitorTextAddDrive(mon, drivestr);
+
+cleanup:
+    virJSONValueFree(args);
+    virJSONValueFree(cmd);
+    virJSONValueFree(reply);
+    return ret;
+}
+
+
+int qemuMonitorJSONDriveDel(qemuMonitorPtr mon,
+                            const char *drivestr)
+{
+    int ret;
+    virJSONValuePtr cmd;
+    virJSONValuePtr reply = NULL;
+
+    VIR_DEBUG("drivestr=%s", drivestr);
+    cmd = qemuMonitorJSONMakeCommand("__com.redhat_drive_del",
+                                     "s:id", drivestr,
+                                     NULL);
+    if (!cmd)
+        return -1;
+
+    if ((ret = qemuMonitorJSONCommand(mon, cmd, &reply)) < 0)
+        goto cleanup;
+
+    if (qemuMonitorJSONHasError(reply, "CommandNotFound")) {
+        virJSONValueFree(cmd);
+        virJSONValueFree(reply);
+        cmd = reply = NULL;
+
+        VIR_DEBUG("__com.redhat_drive_del command not found,"
+                  " trying upstream way");
+    } else if (qemuMonitorJSONHasError(reply, "DeviceNotFound")) {
+        /* NB: device not found errors mean the drive was
+         * auto-deleted and we ignore the error */
+        ret = 0;
+        goto cleanup;
+    } else {
+        ret = qemuMonitorJSONCheckError(cmd, reply);
+        goto cleanup;
+    }
+
+    /* Upstream approach */
+    /* there won't be a direct replacement for drive_del in QMP */
+    if ((ret = qemuMonitorTextDriveDel(mon, drivestr)) < 0) {
+        virErrorPtr err = virGetLastError();
+        if (err && err->code == VIR_ERR_OPERATION_UNSUPPORTED) {
+            VIR_ERROR("%s",
+                      _("deleting disk is not supported.  "
+                        "This may leak data if disk is reassigned"));
+            ret = 1;
+            virResetLastError();
+        }
+    }
+
+cleanup:
+    virJSONValueFree(cmd);
+    virJSONValueFree(reply);
+    return ret;
+}
+
 int qemuMonitorJSONChangeMedia(qemuMonitorPtr mon,
                                const char *dev_name,
                                const char *newmedia,
