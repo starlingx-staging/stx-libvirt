@@ -246,6 +246,12 @@ int qemuMonitorJSONAddObject(qemuMonitorPtr mon,
 int qemuMonitorJSONDelObject(qemuMonitorPtr mon,
                              const char *objalias);
 
+int qemuMonitorJSONAddDrive(qemuMonitorPtr mon,
+                            const char *drivestr);
+
+int qemuMonitorJSONDriveDel(qemuMonitorPtr mon,
+                            const char *drivestr);
+
 int qemuMonitorJSONTransaction(qemuMonitorPtr mon, virJSONValuePtr *actions)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2);
 int qemuMonitorJSONDriveMirror(qemuMonitorPtr mon,
