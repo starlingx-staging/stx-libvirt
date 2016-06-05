@@ -2364,7 +2364,11 @@ qemuProcessInitCpuAffinity(virDomainObjPtr vm)
         cpumapToSet = priv->autoCpuset;
     } else {
         VIR_DEBUG("Set CPU affinity with specified cpuset");
-        if (vm->def->cpumask) {
+        /* Set default placement for any unmanaged qemu threads such
+         * as DPDK rte_eal_thread and ceph librbd IO threads to emulatorpin. */
+        if (vm->def->cputune.emulatorpin) {
+            cpumapToSet = vm->def->cputune.emulatorpin;
+        } else if (vm->def->cpumask) {
             cpumapToSet = vm->def->cpumask;
         } else {
             /* You may think this is redundant, but we can't assume libvirtd
@@ -6506,8 +6510,8 @@ qemuProcessLaunch(virConnectPtr conn,
 
     /* This must be done after cgroup placement to avoid resetting CPU
      * affinity */
-    if (!vm->def->cputune.emulatorpin &&
-        qemuProcessInitCpuAffinity(vm) < 0)
+    /* Set initial cpu affinity so that all threads have default. */
+    if (qemuProcessInitCpuAffinity(vm) < 0)
         goto cleanup;
 
     VIR_DEBUG("Setting emulator tuning/settings");
