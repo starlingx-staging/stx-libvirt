@@ -10232,6 +10232,7 @@ qemuDomainRefreshVcpuInfo(virQEMUDriverPtr driver,
         vcpu = virDomainDefGetVcpu(vm->def, i);
         vcpupriv = QEMU_DOMAIN_VCPU_PRIVATE(vcpu);
 
+#ifdef QEMU_PROCESS_DISABLE_VCPU_DETECT
         /*
          * Current QEMU *can* report info about host threads mapped
          * to vCPUs, but it is not in a manner we can correctly
@@ -10261,6 +10262,7 @@ qemuDomainRefreshVcpuInfo(virQEMUDriverPtr driver,
          * to try to do this hard work.
          */
         if (vm->def->virtType != VIR_DOMAIN_VIRT_QEMU)
+#endif
             vcpupriv->tid = info[i].tid;
 
         vcpupriv->socket_id = info[i].socket_id;
