@@ -2063,6 +2063,8 @@ int qemuMonitorJSONGetMemoryStats(qemuMonitorPtr mon,
     int got = 0;
 
     ret = qemuMonitorJSONGetBalloonInfo(mon, &mem);
+    if (ret < 0)
+        goto cleanup;
     if (ret == 1 && (got < nr_stats)) {
         stats[got].tag = VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON;
         stats[got].val = mem;
