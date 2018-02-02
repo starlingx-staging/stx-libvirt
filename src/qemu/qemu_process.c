@@ -1783,6 +1783,12 @@ qemuConnectMonitor(virQEMUDriverPtr driver, virDomainObjPtr vm, int asyncJob,
      * 1GiB of guest RAM. */
     timeout = vm->def->mem.total_memory / (1024 * 1024);
 
+    /* When launching a number of large VMs concurrently on a single host,
+     * the above timeout may not be good enough.  Pad the timeout
+     * to deal with delays seen under stress testing.
+     */
+    timeout = timeout + 60; /* Wait for a full extra minute */
+
     /* Hold an extra reference because we can't allow 'vm' to be
      * deleted until the monitor gets its own reference. */
     virObjectRef(vm);
