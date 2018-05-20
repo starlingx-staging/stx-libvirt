@@ -38,6 +38,7 @@
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <fcntl.h>
+#include <time.h>
 
 #ifdef __linux__
 # include <linux/sockios.h>
@@ -1521,6 +1522,8 @@ static struct nla_policy ifla_vf_policy[IFLA_VF_MAX+1] = {
                             .maxlen = sizeof(struct ifla_vf_vlan) },
 };
 
+#define VIR_NET_DEV_NUM_RETRY 3
+#define VIR_NET_DEV_DELAY_NS  250000000
 
 static int
 virNetDevSetVfConfig(const char *ifname, int vf,
@@ -1528,6 +1531,7 @@ virNetDevSetVfConfig(const char *ifname, int vf,
                      bool *allowRetry)
 {
     int rc = -1;
+    int i;
     char macstr[VIR_MAC_STRING_BUFLEN];
     struct nlmsghdr *resp = NULL;
     struct nlmsgerr *err;
@@ -1590,6 +1594,7 @@ virNetDevSetVfConfig(const char *ifname, int vf,
     nla_nest_end(nl_msg, vfinfo);
     nla_nest_end(nl_msg, vfinfolist);
 
+  for (i=0; i<VIR_NET_DEV_NUM_RETRY; i++) {
     if (virNetlinkCommand(nl_msg, &resp, &recvbuflen, 0, 0,
                           NETLINK_ROUTE, 0) < 0)
         goto cleanup;
@@ -1622,7 +1627,7 @@ virNetDevSetVfConfig(const char *ifname, int vf,
                                  ifname ? ifname : "(unspecified)",
                                  vf);
             *allowRetry = false; /* no use retrying */
-            goto cleanup;
+            goto retry; /* but we do attempt local retry here within this procedure */
         }
         break;
 
@@ -1653,6 +1658,22 @@ virNetDevSetVfConfig(const char *ifname, int vf,
     virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                    _("allocated netlink buffer is too small"));
     goto cleanup;
+
+ retry:
+    VIR_ERROR(_("Retry: %u"), i);
+    {
+        static struct timespec delay = {
+          .tv_sec = 0,
+          .tv_nsec = VIR_NET_DEV_DELAY_NS };
+
+        if (nanosleep(&delay, NULL) < 0) {
+            virReportSystemError(errno, "%s", _("Failed to sleep"));
+            goto cleanup;
+        }
+    }
+
+  } /* End of local retry loop */
+  goto cleanup; /* we exhausted our local retries */
 }
 
 static int

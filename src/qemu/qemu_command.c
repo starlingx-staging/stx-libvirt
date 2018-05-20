@@ -2288,6 +2288,33 @@ qemuBuildDriveDevStr(const virDomainDef *def,
     return NULL;
 }
 
+static int
+qemuBuildDpdkArgStr(virCommandPtr cmd,
+                    const virDomainDpdkParamsDefPtr dpdk)
+{
+    char *cpumask;
+
+    if (!dpdk) {
+        return 0;
+    }
+
+    cpumask = virBitmapString(dpdk->cpumask);
+    if (!cpumask) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Unable to format DPDK cpumask as string"));
+        return -1;
+    }
+
+    virCommandAddArgFormat(cmd, "-c %s", cpumask);
+    virCommandAddArgFormat(cmd, "-n %u", dpdk->nchannels);
+    virCommandAddArgFormat(cmd, "--proc-type=%s", "secondary");
+    virCommandAddArgFormat(cmd, "--file-prefix=%s", dpdk->file_prefix);
+    virCommandAddArg(cmd, "--");
+    virCommandAddArg(cmd, "-enable-dpdk");
+    VIR_FREE(cpumask);
+
+    return 0;
+}
 
 static int
 qemuBuildDiskDriveCommandLine(virCommandPtr cmd,
@@ -6892,6 +6919,8 @@ qemuBuildCpuModelArgStr(virQEMUDriverPtr driver,
     int ret = -1;
     size_t i;
     virCapsPtr caps = NULL;
+    bool hle = false;
+    bool rtm = false;
     virCPUDefPtr cpu = def->cpu;
 
     if (!(caps = virQEMUDriverGetCapabilities(driver, false)))
@@ -6960,6 +6989,11 @@ qemuBuildCpuModelArgStr(virQEMUDriverPtr driver,
         case VIR_CPU_FEATURE_FORBID:
             if (virQEMUCapsGet(qemuCaps, QEMU_CAPS_QUERY_CPU_MODEL_EXPANSION))
                 virBufferAsprintf(buf, ",%s=off", cpu->features[i].name);
+            if (STREQ("rtm", cpu->features[i].name))
+                rtm = true;
+            if (STREQ("hle", cpu->features[i].name))
+                hle = true;
+
             else
                 virBufferAsprintf(buf, ",-%s", cpu->features[i].name);
             break;
@@ -6967,6 +7001,20 @@ qemuBuildCpuModelArgStr(virQEMUDriverPtr driver,
         case VIR_CPU_FEATURE_OPTIONAL:
         case VIR_CPU_FEATURE_LAST:
             break;
+        }
+
+        /* Some versions of qemu-kvm in RHEL provide Broadwell and Haswell CPU
+         * models which lack rtm and hle features when used with some machine
+         * types. Let's make sure Broadwell and Haswell will always have these
+         * features. But only if the features were not explicitly mentioned in
+         * the guest CPU definition.
+         */
+        if (STREQ_NULLABLE(cpu->model, "Broadwell") ||
+            STREQ_NULLABLE(cpu->model, "Haswell")) {
+            if (!rtm)
+                virBufferAddLit(buf, ",+rtm");
+            if (!hle)
+                virBufferAddLit(buf, ",+hle");
         }
     }
 
@@ -10046,6 +10094,12 @@ qemuBuildCommandLine(virQEMUDriverPtr driver,
     cmd = virCommandNew(def->emulator);
 
     virCommandAddEnvPassCommon(cmd);
+
+    if (def->dpdk) {
+        if (qemuBuildDpdkArgStr(cmd, def->dpdk) < 0) {
+            goto error;
+        }
+    }
 
     if (qemuBuildNameCommandLine(cmd, cfg, def, qemuCaps) < 0)
         goto error;

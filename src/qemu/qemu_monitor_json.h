@@ -61,7 +61,8 @@ int qemuMonitorJSONSystemReset(qemuMonitorPtr mon);
 int qemuMonitorJSONQueryCPUs(qemuMonitorPtr mon,
                              struct qemuMonitorQueryCpusEntry **entries,
                              size_t *nentries,
-                             bool force);
+                             bool force,
+                             bool fast);
 int qemuMonitorJSONGetVirtType(qemuMonitorPtr mon,
                                virDomainVirtType *virtType);
 int qemuMonitorJSONUpdateVideoMemorySize(qemuMonitorPtr mon,
@@ -233,6 +234,12 @@ int qemuMonitorJSONAddObject(qemuMonitorPtr mon,
 int qemuMonitorJSONDelObject(qemuMonitorPtr mon,
                              const char *objalias);
 
+int qemuMonitorJSONAddDrive(qemuMonitorPtr mon,
+                            const char *drivestr);
+
+int qemuMonitorJSONDriveDel(qemuMonitorPtr mon,
+                            const char *drivestr);
+
 int qemuMonitorJSONSetDrivePassphrase(qemuMonitorPtr mon,
                                       const char *alias,
                                       const char *passphrase);
@@ -290,6 +297,10 @@ int qemuMonitorJSONSendKey(qemuMonitorPtr mon,
                            unsigned int holdtime,
                            unsigned int *keycodes,
                            unsigned int nkeycodes);
+
+int qemuMonitorJSONScreendumpRH(qemuMonitorPtr mon,
+                                const char *file,
+                                const char *id);
 
 int qemuMonitorJSONScreendump(qemuMonitorPtr mon,
                               const char *file);

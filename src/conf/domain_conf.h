@@ -1875,6 +1875,23 @@ struct _virDomainOSDef {
     virDomainBIOSDef bios;
 };
 
+enum virDomainDpdkProcessType {
+    VIR_DOMAIN_DPDK_PROCTYPE_AUTO,
+    VIR_DOMAIN_DPDK_PROCTYPE_PRIMARY,
+    VIR_DOMAIN_DPDK_PROCTYPE_SECONDARY,
+
+    VIR_DOMAIN_DPDK_PROCTYPE_LAST
+};
+
+typedef struct _virDomainDpdkParamsDef virDomainDpdkParamsDef;
+typedef virDomainDpdkParamsDef *virDomainDpdkParamsDefPtr;
+struct _virDomainDpdkParamsDef {
+    enum virDomainDpdkProcessType process_type;
+    char *file_prefix;
+    unsigned nchannels;
+    virBitmapPtr cpumask;
+};
+
 typedef enum {
     VIR_DOMAIN_TIMER_NAME_PLATFORM = 0,
     VIR_DOMAIN_TIMER_NAME_PIT,
@@ -2207,6 +2224,23 @@ struct _virDomainMemtune {
     int allocation; /* enum virDomainMemoryAllocation */
 };
 
+typedef struct _virDomainCacheBank virDomainCacheBank;
+typedef virDomainCacheBank *virDomainCacheBankPtr;
+
+struct _virDomainCacheBank {
+    unsigned int cache_id; /* cache id to be allocated on */
+    int type; /* enum virCacheType */
+    unsigned long long size; /* in B */
+    virBitmapPtr vcpus;
+};
+
+typedef struct _virDomainCachetune virDomainCachetune;
+typedef virDomainCachetune *virDomainCachetunePtr;
+struct _virDomainCachetune {
+    size_t n_banks;
+    virDomainCacheBankPtr cache_banks;
+};
+
 typedef struct _virDomainPowerManagement virDomainPowerManagement;
 typedef virDomainPowerManagement *virDomainPowerManagementPtr;
 
@@ -2265,6 +2299,8 @@ struct _virDomainDef {
     char *title;
     char *description;
 
+    virDomainDpdkParamsDefPtr dpdk;
+
     virDomainBlkiotune blkio;
     virDomainMemtune mem;
 
@@ -2279,6 +2315,8 @@ struct _virDomainDef {
     virDomainIOThreadIDDefPtr *iothreadids;
 
     virDomainCputune cputune;
+
+    virDomainCachetune cachetune;
 
     virDomainNumaPtr numa;
     virDomainResourceDefPtr resource;
@@ -2643,6 +2681,7 @@ int virDomainObjWaitUntil(virDomainObjPtr vm,
 
 void virDomainPanicDefFree(virDomainPanicDefPtr panic);
 void virDomainResourceDefFree(virDomainResourceDefPtr resource);
+void virDomainDpdkParamsDefFree(virDomainDpdkParamsDefPtr dpdk);
 void virDomainGraphicsDefFree(virDomainGraphicsDefPtr def);
 void virDomainInputDefFree(virDomainInputDefPtr def);
 virDomainDiskDefPtr virDomainDiskDefNew(virDomainXMLOptionPtr xmlopt);
@@ -3220,6 +3259,7 @@ VIR_ENUM_DECL(virDomainRNGModel)
 VIR_ENUM_DECL(virDomainRNGBackend)
 VIR_ENUM_DECL(virDomainTPMModel)
 VIR_ENUM_DECL(virDomainTPMBackend)
+VIR_ENUM_DECL(virDomainDpdkProcess)
 VIR_ENUM_DECL(virDomainMemoryModel)
 VIR_ENUM_DECL(virDomainMemoryBackingModel)
 VIR_ENUM_DECL(virDomainMemorySource)

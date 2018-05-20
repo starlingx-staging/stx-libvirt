@@ -652,7 +652,7 @@ qemuMonitorJSONHandleIOError(qemuMonitorPtr mon, virJSONValuePtr data)
 {
     const char *device;
     const char *action;
-    const char *reason = "";
+    const char *reason;
     bool nospc = false;
     int actionID;
 
@@ -668,8 +668,14 @@ qemuMonitorJSONHandleIOError(qemuMonitorPtr mon, virJSONValuePtr data)
     if ((device = virJSONValueObjectGetString(data, "device")) == NULL)
         VIR_WARN("missing device in disk io error event");
 
-    if (virJSONValueObjectGetBoolean(data, "nospace", &nospc) == 0 && nospc)
-        reason = "enospc";
+    reason = virJSONValueObjectGetString(data, "__com.redhat_reason");
+    if (!reason) {
+        if (virJSONValueObjectGetBoolean(data, "nospace", &nospc) != 0) {
+            VIR_WARN("neither __com.redhat_reason nor nospace found in disk "
+                     "io error event");
+        }
+        reason = nospc ? "enospc" : "";
+    }
 
     if ((actionID = qemuMonitorIOErrorActionTypeFromString(action)) < 0) {
         VIR_WARN("unknown disk io error action '%s'", action);
@@ -1398,22 +1404,93 @@ int qemuMonitorJSONSystemReset(qemuMonitorPtr mon)
 }
 
 
-/*
+/**
+ * qemuMonitorJSONExtractCPUS390Info:
+ * @jsoncpu: pointer to a single JSON cpu entry
+ * @cpu: pointer to a single cpu entry
  *
+ * Derive the legacy cpu info 'halted' information
+ * from the more accurate s390 cpu state. @cpu is
+ * modified only on success.
+ *
+ * Note: the 'uninitialized' s390 cpu state can't be
+ *       mapped to halted yes/no.
+ *
+ * A s390 cpu entry could look like this
+ *  { "arch": "s390",
+ *    "cpu-index": 0,
+ *    "qom-path": "/machine/unattached/device[0]",
+ *    "thread_id": 3081,
+ *    "cpu-state": "operating" }
+ *
+ */
+static void
+qemuMonitorJSONExtractCPUS390Info(virJSONValuePtr jsoncpu,
+                                  struct qemuMonitorQueryCpusEntry *cpu)
+{
+    const char *cpu_state = virJSONValueObjectGetString(jsoncpu, "cpu-state");
+
+    if (STREQ_NULLABLE(cpu_state, "operating") ||
+        STREQ_NULLABLE(cpu_state, "load"))
+        cpu->halted = false;
+    else if (STREQ_NULLABLE(cpu_state, "stopped") ||
+             STREQ_NULLABLE(cpu_state, "check-stop"))
+        cpu->halted = true;
+}
+
+/**
+ * qemuMonitorJSONExtractCPUArchInfo:
+ * @arch: virtual CPU's architecture
+ * @jsoncpu: pointer to a single JSON cpu entry
+ * @cpu: pointer to a single cpu entry
+ *
+ * Extracts architecure specific virtual CPU data for a single
+ * CPU from the QAPI response using an architecture specific
+ * function.
+ *
+ */
+static void
+qemuMonitorJSONExtractCPUArchInfo(const char *arch,
+                                  virJSONValuePtr jsoncpu,
+                                  struct qemuMonitorQueryCpusEntry *cpu)
+{
+    if (STREQ_NULLABLE(arch, "s390"))
+        qemuMonitorJSONExtractCPUS390Info(jsoncpu, cpu);
+}
+
+/**
+ * qemuMonitorJSONExtractCPUArchInfo:
+ * @data: JSON response data
+ * @entries: filled with detected cpu entries on success
+ * @nentries: number of entries returned
+ * @fast: true if this is a response from query-cpus-fast
+ *
+ * The JSON response @data will have the following format
+ * in case @fast == false
  * [{ "arch": "x86",
  *    "current": true,
  *    "CPU": 0,
  *    "qom_path": "/machine/unattached/device[0]",
  *    "pc": -2130415978,
  *    "halted": true,
- *    "thread_id": 2631237},
+ *    "thread_id": 2631237,
+ *    ...},
+ *    {...}
+ *  ]
+ * and for @fast == true
+ * [{ "arch": "x86",
+ *    "cpu-index": 0,
+ *    "qom-path": "/machine/unattached/device[0]",
+ *    "thread_id": 2631237,
+ *    ...},
  *    {...}
  *  ]
  */
 static int
 qemuMonitorJSONExtractCPUInfo(virJSONValuePtr data,
                               struct qemuMonitorQueryCpusEntry **entries,
-                              size_t *nentries)
+                              size_t *nentries,
+                              bool fast)
 {
     struct qemuMonitorQueryCpusEntry *cpus = NULL;
     int ret = -1;
@@ -1432,23 +1509,36 @@ qemuMonitorJSONExtractCPUInfo(virJSONValuePtr data,
         int thread = 0;
         bool halted = false;
         const char *qom_path;
+        const char *arch;
         if (!entry) {
             ret = -2;
             goto cleanup;
         }
 
         /* Some older qemu versions don't report the thread_id so treat this as
-         * non-fatal, simply returning no data */
-        ignore_value(virJSONValueObjectGetNumberInt(entry, "CPU", &cpuid));
-        ignore_value(virJSONValueObjectGetNumberInt(entry, "thread_id", &thread));
-        ignore_value(virJSONValueObjectGetBoolean(entry, "halted", &halted));
-        qom_path = virJSONValueObjectGetString(entry, "qom_path");
+         * non-fatal, simply returning no data.
+         * The return data of query-cpus-fast has different field names
+         */
+        if (fast) {
+            ignore_value(virJSONValueObjectGetNumberInt(entry, "cpu-index", &cpuid));
+            ignore_value(virJSONValueObjectGetNumberInt(entry, "thread-id", &thread));
+            qom_path = virJSONValueObjectGetString(entry, "qom-path");
+        } else {
+            ignore_value(virJSONValueObjectGetNumberInt(entry, "CPU", &cpuid));
+            ignore_value(virJSONValueObjectGetNumberInt(entry, "thread_id", &thread));
+            ignore_value(virJSONValueObjectGetBoolean(entry, "halted", &halted));
+            qom_path = virJSONValueObjectGetString(entry, "qom_path");
+        }
 
         cpus[i].qemu_id = cpuid;
         cpus[i].tid = thread;
         cpus[i].halted = halted;
         if (VIR_STRDUP(cpus[i].qom_path, qom_path) < 0)
             goto cleanup;
+
+        /* process optional architecture-specific data */
+        arch = virJSONValueObjectGetString(entry, "arch");
+        qemuMonitorJSONExtractCPUArchInfo(arch, entry, cpus + i);
     }
 
     VIR_STEAL_PTR(*entries, cpus);
@@ -1467,10 +1557,12 @@ qemuMonitorJSONExtractCPUInfo(virJSONValuePtr data,
  * @mon: monitor object
  * @entries: filled with detected entries on success
  * @nentries: number of entries returned
+ * @force: force exit on error
+ * @fast: use query-cpus-fast
  *
  * Queries qemu for cpu-related information. Failure to execute the command or
  * extract results does not produce an error as libvirt can continue without
- * this information.
+ * this information, unless the caller has specified @force == true.
  *
  * Returns 0 on success, -1 on a fatal error (oom ...) and -2 if the
  * query failed gracefully.
@@ -1479,12 +1571,18 @@ int
 qemuMonitorJSONQueryCPUs(qemuMonitorPtr mon,
                          struct qemuMonitorQueryCpusEntry **entries,
                          size_t *nentries,
-                         bool force)
+                         bool force,
+                         bool fast)
 {
     int ret = -1;
-    virJSONValuePtr cmd = qemuMonitorJSONMakeCommand("query-cpus", NULL);
+    virJSONValuePtr cmd;
     virJSONValuePtr reply = NULL;
     virJSONValuePtr data;
+
+    if (fast)
+        cmd = qemuMonitorJSONMakeCommand("query-cpus-fast", NULL);
+    else
+        cmd = qemuMonitorJSONMakeCommand("query-cpus", NULL);
 
     if (!cmd)
         return -1;
@@ -1500,7 +1598,7 @@ qemuMonitorJSONQueryCPUs(qemuMonitorPtr mon,
         goto cleanup;
     }
 
-    ret = qemuMonitorJSONExtractCPUInfo(data, entries, nentries);
+    ret = qemuMonitorJSONExtractCPUInfo(data, entries, nentries, fast);
 
  cleanup:
     virJSONValueFree(cmd);
@@ -1759,6 +1857,8 @@ int qemuMonitorJSONGetMemoryStats(qemuMonitorPtr mon,
     int got = 0;
 
     ret = qemuMonitorJSONGetBalloonInfo(mon, &mem);
+    if (ret < 0)
+        goto cleanup;
     if (ret == 1 && (got < nr_stats)) {
         stats[got].tag = VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON;
         stats[got].val = mem;
@@ -3818,6 +3918,112 @@ int qemuMonitorJSONDelObject(qemuMonitorPtr mon,
 }
 
 
+int qemuMonitorJSONAddDrive(qemuMonitorPtr mon,
+                            const char *drivestr)
+{
+    int ret = -1;
+    virJSONValuePtr cmd;
+    virJSONValuePtr reply = NULL;
+    virJSONValuePtr args;
+
+    cmd = qemuMonitorJSONMakeCommand("__com.redhat_drive_add",
+                                     NULL);
+    if (!cmd)
+        return -1;
+
+    args = qemuMonitorJSONKeywordStringToJSON(drivestr, "type");
+    if (!args)
+        goto cleanup;
+
+    /* __com.redhat_drive_add rejects the 'if' key */
+    virJSONValueObjectRemoveKey(args, "if", NULL);
+
+    if (virJSONValueObjectAppend(cmd, "arguments", args) < 0) {
+        virReportOOMError();
+        goto cleanup;
+    }
+    args = NULL; /* cmd owns reference to args now */
+
+    if ((ret = qemuMonitorJSONCommand(mon, cmd, &reply)) < 0)
+        goto cleanup;
+
+    if (qemuMonitorJSONHasError(reply, "CommandNotFound")) {
+        virJSONValueFree(cmd);
+        virJSONValueFree(reply);
+        cmd = reply = NULL;
+
+        VIR_DEBUG("__com.redhat_drive_add command not found,"
+                  " trying upstream way");
+    } else {
+        ret = qemuMonitorJSONCheckError(cmd, reply);
+        goto cleanup;
+    }
+
+    /* Upstream approach */
+    /* there won't be a direct replacement for drive_add in QMP */
+    ret = qemuMonitorTextAddDrive(mon, drivestr);
+
+cleanup:
+    virJSONValueFree(args);
+    virJSONValueFree(cmd);
+    virJSONValueFree(reply);
+    return ret;
+}
+
+
+int qemuMonitorJSONDriveDel(qemuMonitorPtr mon,
+                            const char *drivestr)
+{
+    int ret;
+    virJSONValuePtr cmd;
+    virJSONValuePtr reply = NULL;
+
+    VIR_DEBUG("drivestr=%s", drivestr);
+    cmd = qemuMonitorJSONMakeCommand("__com.redhat_drive_del",
+                                     "s:id", drivestr,
+                                     NULL);
+    if (!cmd)
+        return -1;
+
+    if ((ret = qemuMonitorJSONCommand(mon, cmd, &reply)) < 0)
+        goto cleanup;
+
+    if (qemuMonitorJSONHasError(reply, "CommandNotFound")) {
+        virJSONValueFree(cmd);
+        virJSONValueFree(reply);
+        cmd = reply = NULL;
+
+        VIR_DEBUG("__com.redhat_drive_del command not found,"
+                  " trying upstream way");
+    } else if (qemuMonitorJSONHasError(reply, "DeviceNotFound")) {
+        /* NB: device not found errors mean the drive was
+         * auto-deleted and we ignore the error */
+        ret = 0;
+        goto cleanup;
+    } else {
+        ret = qemuMonitorJSONCheckError(cmd, reply);
+        goto cleanup;
+    }
+
+    /* Upstream approach */
+    /* there won't be a direct replacement for drive_del in QMP */
+    if ((ret = qemuMonitorTextDriveDel(mon, drivestr)) < 0) {
+        virErrorPtr err = virGetLastError();
+        if (err && err->code == VIR_ERR_OPERATION_UNSUPPORTED) {
+            VIR_ERROR("%s",
+                      _("deleting disk is not supported.  "
+                        "This may leak data if disk is reassigned"));
+            ret = 1;
+            virResetLastError();
+        }
+    }
+
+cleanup:
+    virJSONValueFree(cmd);
+    virJSONValueFree(reply);
+    return ret;
+}
+
 int qemuMonitorJSONSetDrivePassphrase(qemuMonitorPtr mon,
                                       const char *alias,
                                       const char *passphrase)
@@ -4270,6 +4476,30 @@ int qemuMonitorJSONSendKey(qemuMonitorPtr mon,
     virJSONValueFree(reply);
     virJSONValueFree(keys);
     virJSONValueFree(key);
+    return ret;
+}
+
+int qemuMonitorJSONScreendumpRH(qemuMonitorPtr mon,
+                                const char *file,
+                                const char *id)
+{
+    int ret = -1;
+    virJSONValuePtr cmd, reply = NULL;
+
+    cmd = qemuMonitorJSONMakeCommand("__com.redhat_qxl_screendump",
+                                     "s:filename", file,
+                                     "s:id", id,
+                                     NULL);
+    if (!cmd)
+        return -1;
+
+    ret = qemuMonitorJSONCommand(mon, cmd, &reply);
+
+    if (ret == 0)
+        ret = qemuMonitorJSONCheckError(cmd, reply);
+
+    virJSONValueFree(cmd);
+    virJSONValueFree(reply);
     return ret;
 }
 

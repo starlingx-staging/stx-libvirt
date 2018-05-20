@@ -4644,7 +4644,7 @@ qemuDomainLogContextPtr qemuDomainLogContextNew(virQEMUDriverPtr driver,
         if (ctxt->writefd < 0)
             goto error;
     } else {
-        if ((ctxt->writefd = open(ctxt->path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)) < 0) {
+        if ((ctxt->writefd = open(ctxt->path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP)) < 0) {
             virReportSystemError(errno, _("failed to create logfile %s"),
                                  ctxt->path);
             goto error;
@@ -4667,7 +4667,7 @@ qemuDomainLogContextPtr qemuDomainLogContextNew(virQEMUDriverPtr driver,
         }
 
         if (mode == QEMU_DOMAIN_LOG_CONTEXT_MODE_START) {
-            if ((ctxt->readfd = open(ctxt->path, O_RDONLY, S_IRUSR | S_IWUSR)) < 0) {
+            if ((ctxt->readfd = open(ctxt->path, O_RDONLY, S_IRUSR | S_IWUSR | S_IRGRP)) < 0) {
                 virReportSystemError(errno, _("failed to open logfile %s"),
                                      ctxt->path);
                 goto error;
@@ -4817,7 +4817,7 @@ qemuDomainLogAppendMessage(virQEMUDriverPtr driver,
                                              vm->def->name, path, message, 0) < 0)
             goto cleanup;
     } else {
-        if ((writefd = open(path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)) < 0) {
+        if ((writefd = open(path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP)) < 0) {
             virReportSystemError(errno, _("failed to create logfile %s"),
                                  path);
             goto cleanup;
@@ -6283,6 +6283,9 @@ qemuDomainMachineNeedsFDC(const char *machine)
             STRPREFIX(p, "2.2") ||
             STRPREFIX(p, "2.3"))
             return false;
+        if (STRPREFIX(p, "rhel7.0.0") ||
+            STRPREFIX(p, "rhel7.1.0"))
+            return false;
         return true;
     }
     return false;
@@ -6940,7 +6943,12 @@ qemuDomainRefreshVcpuInfo(virQEMUDriverPtr driver,
     if (qemuDomainObjEnterMonitorAsync(driver, vm, asyncJob) < 0)
         return -1;
 
-    rc = qemuMonitorGetCPUInfo(qemuDomainGetMonitor(vm), &info, maxvcpus, hotplug);
+    rc = qemuMonitorGetCPUInfo(qemuDomainGetMonitor(vm),
+                               &info,
+                               maxvcpus,
+                               hotplug,
+                               virQEMUCapsGet(QEMU_DOMAIN_PRIVATE(vm)->qemuCaps,
+                                              QEMU_CAPS_QUERY_CPUS_FAST));
 
     if (qemuDomainObjExitMonitor(driver, vm) < 0)
         goto cleanup;
@@ -6952,6 +6960,7 @@ qemuDomainRefreshVcpuInfo(virQEMUDriverPtr driver,
         vcpu = virDomainDefGetVcpu(vm->def, i);
         vcpupriv = QEMU_DOMAIN_VCPU_PRIVATE(vcpu);
 
+#ifdef QEMU_PROCESS_DISABLE_VCPU_DETECT
         /*
          * Current QEMU *can* report info about host threads mapped
          * to vCPUs, but it is not in a manner we can correctly
@@ -6981,6 +6990,7 @@ qemuDomainRefreshVcpuInfo(virQEMUDriverPtr driver,
          * to try to do this hard work.
          */
         if (vm->def->virtType != VIR_DOMAIN_VIRT_QEMU)
+#endif
             vcpupriv->tid = info[i].tid;
 
         vcpupriv->socket_id = info[i].socket_id;
@@ -7051,10 +7061,23 @@ qemuDomainRefreshVcpuHalted(virQEMUDriverPtr driver,
     if (vm->def->virtType == VIR_DOMAIN_VIRT_QEMU)
         return 0;
 
+    /* The halted state is interresting only on s390(x). On other platforms
+     * the data would be stale at the time when it would be used.
+     * Calling qemuMonitorGetCpuHalted() can adversely affect the running
+     * VM's performance unless QEMU supports query-cpus-fast.
+     */
+    if (!ARCH_IS_S390(vm->def->os.arch) ||
+        !virQEMUCapsGet(QEMU_DOMAIN_PRIVATE(vm)->qemuCaps,
+                        QEMU_CAPS_QUERY_CPUS_FAST))
+        return 0;
+
     if (qemuDomainObjEnterMonitorAsync(driver, vm, asyncJob) < 0)
         return -1;
 
-    haltedmap = qemuMonitorGetCpuHalted(qemuDomainGetMonitor(vm), maxvcpus);
+    haltedmap = qemuMonitorGetCpuHalted(qemuDomainGetMonitor(vm),
+                                        maxvcpus,
+                                        virQEMUCapsGet(QEMU_DOMAIN_PRIVATE(vm)->qemuCaps,
+                                                       QEMU_CAPS_QUERY_CPUS_FAST));
 
     if (qemuDomainObjExitMonitor(driver, vm) < 0 || !haltedmap)
         goto cleanup;

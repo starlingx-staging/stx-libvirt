@@ -70,6 +70,7 @@
 #include "virbitmap.h"
 #include "viratomic.h"
 #include "virnuma.h"
+#include "virresctrl.h"
 #include "virstring.h"
 #include "virhostdev.h"
 #include "secret_util.h"
@@ -1733,6 +1734,12 @@ qemuConnectMonitor(virQEMUDriverPtr driver, virDomainObjPtr vm, int asyncJob,
      * 1GiB of guest RAM. */
     timeout = vm->def->mem.total_memory / (1024 * 1024);
 
+    /* When launching a number of large VMs concurrently on a single host,
+     * the above timeout may not be good enough.  Pad the timeout
+     * to deal with delays seen under stress testing.
+     */
+    timeout = timeout + 60; /* Wait for a full extra minute */
+
     /* Hold an extra reference because we can't allow 'vm' to be
      * deleted until the monitor gets its own reference. */
     virObjectRef(vm);
@@ -2247,7 +2254,11 @@ qemuProcessInitCpuAffinity(virDomainObjPtr vm)
         cpumapToSet = priv->autoCpuset;
     } else {
         VIR_DEBUG("Set CPU affinity with specified cpuset");
-        if (vm->def->cpumask) {
+        /* CGTS-4072: Set default placement for any unmanaged qemu threads such
+         * as DPDK rte_eal_thread and ceph librbd IO threads to emulatorpin. */
+        if (vm->def->cputune.emulatorpin) {
+            cpumapToSet = vm->def->cputune.emulatorpin;
+        } else if (vm->def->cpumask) {
             cpumapToSet = vm->def->cpumask;
         } else {
             /* You may think this is redundant, but we can't assume libvirtd
@@ -5131,6 +5142,80 @@ qemuProcessSetupVcpus(virDomainObjPtr vm)
 }
 
 
+static int
+qemuProcessSetCacheBanks(virCapsHostPtr caps, virDomainObjPtr vm)
+{
+    size_t i, j;
+    virDomainCachetunePtr cachetune;
+    virResctrlCachetunePtr resctrl_cachetune;
+    unsigned int max_vcpus = virDomainDefGetVcpusMax(vm->def);
+    pid_t *pids = NULL;
+    virDomainVcpuDefPtr vcpu;
+    size_t npids = 0;
+    size_t count = 0;
+    int ret = -1;
+
+    cachetune = &(vm->def->cachetune);
+
+    if (VIR_ALLOC_N(resctrl_cachetune, cachetune->n_banks) < 0)
+        goto cleanup;
+
+    /* construct resctrl_cachetune array */
+    for (i = 0; i < cachetune->n_banks; i++) {
+
+        resctrl_cachetune[i].cache_id = cachetune->cache_banks[i].cache_id;
+        resctrl_cachetune[i].type = cachetune->cache_banks[i].type;
+        resctrl_cachetune[i].size = cachetune->cache_banks[i].size;
+
+        /* get granularity from host's capabilities */
+        for (j = 0; j < caps->ncaches; j++) {
+            /* even enable CDP, granularity for code and data are same */
+            if (caps->caches[j]->id == resctrl_cachetune[i].cache_id &&
+                caps->caches[j]->controls) {
+                resctrl_cachetune[i].granularity = caps->caches[j]->controls[0]->granularity;
+                break;
+            }
+        }
+
+        /* create pids of vcpus array */
+        if (cachetune->cache_banks[i].vcpus) {
+            for (j = 0; j < max_vcpus; j++) {
+                if (virBitmapIsBitSet(cachetune->cache_banks[i].vcpus, j)) {
+
+                    vcpu = virDomainDefGetVcpu(vm->def, j);
+                    if (!vcpu->online)
+                        continue;
+
+                    if (VIR_RESIZE_N(pids, npids, count, 1) < 0)
+                        goto cleanup;
+
+                    pids[count ++] = qemuDomainGetVcpuPid(vm, j);
+                }
+            }
+        }
+    }
+
+    /* If not specify vcpus in cachetune, add vm->pid */
+    if (pids == NULL) {
+        if (VIR_ALLOC_N(pids, 1) < 0)
+            goto cleanup;
+        pids[0] = vm->pid;
+        count = 1;
+    }
+
+    ret = virResctrlSetCachetunes(vm->def->uuid,
+                                  resctrl_cachetune,
+                                  cachetune->n_banks,
+                                  pids,
+                                  count);
+
+ cleanup:
+    VIR_FREE(resctrl_cachetune);
+    VIR_FREE(pids);
+    return ret;
+}
+
+
 int
 qemuProcessSetupIOThread(virDomainObjPtr vm,
                          virDomainIOThreadIDDefPtr iothread)
@@ -5822,8 +5907,8 @@ qemuProcessLaunch(virConnectPtr conn,
 
     /* This must be done after cgroup placement to avoid resetting CPU
      * affinity */
-    if (!vm->def->cputune.emulatorpin &&
-        qemuProcessInitCpuAffinity(vm) < 0)
+    /* CGTS-4072: Set initial cpu affinity so that all threads have default. */
+    if (qemuProcessInitCpuAffinity(vm) < 0)
         goto cleanup;
 
     VIR_DEBUG("Setting emulator tuning/settings");
@@ -5960,6 +6045,12 @@ qemuProcessLaunch(virConnectPtr conn,
 
     VIR_DEBUG("Updating disk data");
     if (qemuProcessRefreshDisks(driver, vm, asyncJob) < 0)
+        goto cleanup;
+
+    VIR_DEBUG("Updating cache allocation");
+    if (vm->def->cachetune.n_banks > 0 &&
+        qemuProcessSetCacheBanks(&driver->caps->host,
+                                 vm) < 0)
         goto cleanup;
 
     if (flags & VIR_QEMU_PROCESS_START_AUTODESTROY &&
@@ -6471,6 +6562,9 @@ void qemuProcessStop(virQEMUDriverPtr driver,
 
     virPerfFree(priv->perf);
     priv->perf = NULL;
+
+    if (vm->def->cachetune.n_banks > 0)
+        virResctrlRemoveCachetunes(vm->def->uuid);
 
     qemuProcessRemoveDomainStatus(driver, vm);
 

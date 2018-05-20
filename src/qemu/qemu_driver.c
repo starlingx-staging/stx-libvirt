@@ -2220,6 +2220,9 @@ qemuDomainDestroyFlags(virDomainPtr dom,
     virObjectEventPtr event = NULL;
     qemuDomainObjPrivatePtr priv;
     unsigned int stopFlags = 0;
+    int state;
+    int reason;
+    bool starting;
 
     virCheckFlags(VIR_DOMAIN_DESTROY_GRACEFUL, -1);
 
@@ -2231,13 +2234,29 @@ qemuDomainDestroyFlags(virDomainPtr dom,
     if (virDomainDestroyFlagsEnsureACL(dom->conn, vm->def) < 0)
         goto cleanup;
 
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       "%s", _("domain is not running"));
+        goto cleanup;
+    }
+
+    state = virDomainObjGetState(vm, &reason);
+    starting = (state == VIR_DOMAIN_PAUSED &&
+                reason == VIR_DOMAIN_PAUSED_STARTING_UP &&
+                !priv->beingDestroyed);
+
     if (qemuProcessBeginStopJob(driver, vm, QEMU_JOB_DESTROY,
                                 !(flags & VIR_DOMAIN_DESTROY_GRACEFUL)) < 0)
         goto cleanup;
 
     if (!virDomainObjIsActive(vm)) {
-        virReportError(VIR_ERR_OPERATION_INVALID,
-                       "%s", _("domain is not running"));
+        if (starting) {
+            VIR_DEBUG("Domain %s is not running anymore", vm->def->name);
+            ret = 0;
+        } else {
+            virReportError(VIR_ERR_OPERATION_INVALID,
+                           "%s", _("domain is not running"));
+        }
         goto endjob;
     }
 
@@ -3946,6 +3965,8 @@ qemuDomainScreenshot(virDomainPtr dom,
     char *ret = NULL;
     bool unlink_tmp = false;
     virQEMUDriverConfigPtr cfg = NULL;
+    int video_index = 0;
+    const char *video_id = NULL;
 
     virCheckFlags(0, NULL);
 
@@ -3967,12 +3988,15 @@ qemuDomainScreenshot(virDomainPtr dom,
         goto endjob;
     }
 
-    /* Well, even if qemu allows multiple graphic cards, heads, whatever,
-     * screenshot command does not */
-    if (screen) {
-        virReportError(VIR_ERR_INVALID_ARG,
-                       "%s", _("currently is supported only taking "
-                               "screenshots of screen ID 0"));
+    while (video_index < vm->def->nvideos) {
+        if (screen < vm->def->videos[video_index]->heads)
+            break;
+        screen -= vm->def->videos[video_index]->heads;
+        video_index++;
+    }
+
+    if (video_index == vm->def->nvideos) {
+        virReportError(VIR_ERR_INVALID_ARG, "%s", _("no such screen"));
         goto endjob;
     }
 
@@ -3987,8 +4011,11 @@ qemuDomainScreenshot(virDomainPtr dom,
 
     qemuSecuritySetSavedStateLabel(driver->securityManager, vm->def, tmp);
 
+    if (video_index)
+        video_id = vm->def->videos[video_index]->info.alias;
+
     qemuDomainObjEnterMonitor(driver, vm);
-    if (qemuMonitorScreendump(priv->mon, tmp) < 0) {
+    if (qemuMonitorScreendump(priv->mon, tmp, video_id) < 0) {
         ignore_value(qemuDomainObjExitMonitor(driver, vm));
         goto endjob;
     }

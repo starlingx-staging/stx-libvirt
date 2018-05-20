@@ -834,6 +834,25 @@
             </attribute>
           </element>
         </zeroOrMore>
+        <zeroOrMore>
+          <element name="cachetune">
+            <attribute name="cacheId">
+              <ref name="cacheid"/>
+            </attribute>
+            <attribute name="type">
+              <ref name="cachetype"/>
+            </attribute>
+             <!-- Cache size is an attribute in KiB, no way to express a unit -->
+            <attribute name="sizeKiB">
+              <ref name="unsignedLong"/>
+            </attribute>
+            <optional>
+              <attribute name="vcpus">
+                <ref name="cpuset"/>
+              </attribute>
+            </optional>
+          </element>
+        </zeroOrMore>
         <optional>
           <element name="emulatorpin">
             <attribute name="cpuset">
@@ -5702,6 +5721,16 @@
   <define name="rebootTimeoutDelay">
     <data type="short">
       <param name="minInclusive">-1</param>
+    </data>
+  </define>
+  <define name="cacheid">
+    <data type="unsignedShort">
+      <param name="pattern">[0-9]+</param>
+    </data>
+  </define>
+  <define name="cachetype">
+    <data type="string">
+      <param name="pattern">(both|code|data)</param>
     </data>
   </define>
   <!-- weight currently is in range [100, 1000] -->

@@ -430,6 +430,7 @@ VIR_ENUM_IMPL(virQEMUCaps, QEMU_CAPS_LAST,
               "virtio.iommu_platform",
               "virtio.ats",
               "loadparm",
+              "query-cpus-fast",
     );
 
 
@@ -1565,13 +1566,15 @@ struct virQEMUCapsStringFlags virQEMUCapsCommands[] = {
     { "add-fd", QEMU_CAPS_ADD_FD },
     { "nbd-server-start", QEMU_CAPS_NBD_SERVER },
     { "change-backing-file", QEMU_CAPS_CHANGE_BACKING_FILE },
+    { "__com.redhat_change-backing-file", QEMU_CAPS_CHANGE_BACKING_FILE },
     { "rtc-reset-reinjection", QEMU_CAPS_RTC_RESET_REINJECTION },
     { "migrate-incoming", QEMU_CAPS_INCOMING_DEFER },
     { "query-hotpluggable-cpus", QEMU_CAPS_QUERY_HOTPLUGGABLE_CPUS },
     { "query-qmp-schema", QEMU_CAPS_QUERY_QMP_SCHEMA },
     { "query-cpu-model-expansion", QEMU_CAPS_QUERY_CPU_MODEL_EXPANSION},
     { "query-cpu-definitions", QEMU_CAPS_QUERY_CPU_DEFINITIONS},
-    { "query-named-block-nodes", QEMU_CAPS_QUERY_NAMED_BLOCK_NODES}
+    { "query-named-block-nodes", QEMU_CAPS_QUERY_NAMED_BLOCK_NODES},
+    { "query-cpus-fast", QEMU_CAPS_QUERY_CPUS_FAST}
 };
 
 struct virQEMUCapsStringFlags virQEMUCapsMigration[] = {
@@ -4812,8 +4815,11 @@ virQEMUCapsInitQMPMonitor(virQEMUCapsPtr qemuCaps,
         virQEMUCapsSet(qemuCaps, QEMU_CAPS_CPU_AARCH64_OFF);
 
     /* vhost-user supports multi-queue from v2.4.0 onwards,
-     * but there is no way to query for that capability */
-    if (qemuCaps->version >= 2004000)
+     * but there is no way to query for that capability
+     *
+     * RHEL-only: The change was back-ported to earlier QEMU version,
+     * particularly 2.3, in BZ 1276100 */
+    if (qemuCaps->version >= 2003000)
         virQEMUCapsSet(qemuCaps, QEMU_CAPS_VHOSTUSER_MULTIQUEUE);
 
     /* smm option is supported from v2.4.0 */

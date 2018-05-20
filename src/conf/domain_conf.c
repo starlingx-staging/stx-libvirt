@@ -839,6 +839,11 @@ VIR_ENUM_IMPL(virDomainTPMBackend, VIR_DOMAIN_TPM_TYPE_LAST,
 VIR_ENUM_IMPL(virDomainIOMMUModel, VIR_DOMAIN_IOMMU_MODEL_LAST,
               "intel")
 
+VIR_ENUM_IMPL(virDomainDpdkProcess, VIR_DOMAIN_DPDK_PROCTYPE_LAST,
+              "auto",
+              "primary",
+              "secondary")
+
 VIR_ENUM_IMPL(virDomainDiskDiscard, VIR_DOMAIN_DISK_DISCARD_LAST,
               "default",
               "unmap",
@@ -1173,6 +1178,103 @@ virBlkioDeviceArrayClear(virBlkioDevicePtr devices,
 
     for (i = 0; i < ndevices; i++)
         VIR_FREE(devices[i].path);
+}
+
+/**
+ * virDomainDpdkParamsDefPtr
+ *
+ * this function parses a XML node:
+ *
+ *   <dpdk>
+ *     <process type='secondary'/>
+ *     <file prefix='vs'/>
+ *     <memory channels='4'/>
+ *     <cpu list='0,2-3'/>
+ *   </dpdk>
+ *
+ * and fills a virDpdkParams struct.
+ */
+static int
+virDomainDpdkParamsParseXML(xmlNodePtr ctxt,
+                            virDomainDpdkParamsDefPtr dpdk)
+{
+    char *channels = NULL;
+    char *process_type = NULL;
+    char *file_prefix = NULL;
+    char *cpu_list = NULL;
+    xmlNodePtr cur;
+    int ret = -EINVAL;
+
+    cur = ctxt->children;
+    while (cur != NULL) {
+        if (cur->type == XML_ELEMENT_NODE) {
+            if (!process_type && xmlStrEqual(cur->name, BAD_CAST "process")) {
+                process_type = virXMLPropString(cur, "type");
+            }
+            if (!file_prefix && xmlStrEqual(cur->name, BAD_CAST "file")) {
+                file_prefix = virXMLPropString(cur, "prefix");
+            }
+            if (!cpu_list && xmlStrEqual(cur->name, BAD_CAST "cpu")) {
+                cpu_list = virXMLPropString(cur, "list");
+            }
+            if (!channels && xmlStrEqual(cur->name, BAD_CAST "memory")) {
+                channels = virXMLPropString(cur, "channels");
+            }
+        }
+        cur = cur->next;
+    }
+
+    if (!process_type) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("missing DPDK process type"));
+        goto error;
+    }
+    if (!file_prefix) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("missing DPDK file prefix"));
+        goto error;
+    }
+    if (!cpu_list) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("missing DPDK CPU list"));
+        goto error;
+    }
+    if (!channels) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("missing DPDK memory channel count"));
+        goto error;
+    }
+
+    dpdk->process_type = virDomainDpdkProcessTypeFromString(process_type);
+    if (virStrToLong_ui(channels, NULL, 10, &dpdk->nchannels) < 0) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("could not parse DPDK memory channels %s"),
+                       channels);
+        goto error;
+    }
+    if (virBitmapParse(cpu_list, &dpdk->cpumask, 128) < 0) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("could not parse DPDK CPU list %s"),
+                       cpu_list);
+        goto error;
+    }
+    if (VIR_STRDUP(dpdk->file_prefix, file_prefix) < 0) {
+        goto error;
+    }
+
+    ret = 0;
+
+cleanup:
+    VIR_FREE(process_type);
+    VIR_FREE(file_prefix);
+    VIR_FREE(cpu_list);
+    VIR_FREE(channels);
+
+    return ret;
+error:
+    virDomainDpdkParamsDefFree(dpdk);
+    ret = -EINVAL;
+    goto cleanup;
 }
 
 /**
@@ -2650,6 +2752,15 @@ virDomainIOThreadIDArrayHasPin(virDomainDefPtr def)
     return false;
 }
 
+void
+virDomainDpdkParamsDefFree(virDomainDpdkParamsDefPtr dpdk)
+{
+    if (!dpdk)
+        return;
+
+    virBitmapFree(dpdk->cpumask);
+    VIR_FREE(dpdk->file_prefix);
+}
 
 void
 virDomainIOThreadIDDefFree(virDomainIOThreadIDDefPtr def)
@@ -2775,6 +2886,9 @@ void virDomainDefFree(virDomainDefPtr def)
     for (i = 0; i < def->maxvcpus; i++)
         virDomainVcpuDefFree(def->vcpus[i]);
     VIR_FREE(def->vcpus);
+
+    virDomainDpdkParamsDefFree(def->dpdk);
+    VIR_FREE(def->dpdk);
 
     /* hostdevs must be freed before nets (or any future "intelligent
      * hostdevs") because the pointer to the hostdev is really
@@ -2930,6 +3044,10 @@ void virDomainDefFree(virDomainDefPtr def)
 
     if (def->namespaceData && def->ns.free)
         (def->ns.free)(def->namespaceData);
+
+    for (i = 0; i < def->cachetune.n_banks; i++)
+        virBitmapFree(def->cachetune.cache_banks[i].vcpus);
+    VIR_FREE(def->cachetune.cache_banks);
 
     xmlFreeNode(def->metadata);
 
@@ -16365,6 +16483,83 @@ virDomainVcpuPinDefParseXML(virDomainDefPtr def,
     return ret;
 }
 
+/* Parse the XML definition for cachetune
+ * and a cachetune has the form
+ * <cacheId='0' type='both' sizeKib='1024' vcpus='0,1'/>
+ */
+static int
+virDomainCacheTuneDefParseXML(virDomainDefPtr def,
+                              int n,
+                              xmlNodePtr* nodes)
+{
+    char* tmp = NULL;
+    size_t i;
+    int type = -1;
+    virDomainCacheBankPtr bank = NULL;
+
+    if (VIR_ALLOC_N(bank, n) < 0)
+        goto cleanup;
+
+    for (i = 0; i < n; i++) {
+        if (!(tmp = virXMLPropString(nodes[i], "cacheId"))) {
+            virReportError(VIR_ERR_XML_ERROR, "%s", _("missing cacheId in cache tune"));
+            goto cleanup;
+        }
+        if (virStrToLong_uip(tmp, NULL, 10, &(bank[i].cache_id)) < 0) {
+            virReportError(VIR_ERR_XML_ERROR,
+                           _("invalid setting for cacheId '%s'"), tmp);
+            goto cleanup;
+        }
+        VIR_FREE(tmp);
+
+        if (!(tmp = virXMLPropString(nodes[i], "type"))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("missing cache type"));
+            goto cleanup;
+        }
+        if ((type = virCacheTypeFromString(tmp)) < 0) {
+            virReportError(VIR_ERR_XML_ERROR,
+                    _("'unsupported cache type '%s'"), tmp);
+            goto cleanup;
+        }
+        bank[i].type = type;
+        VIR_FREE(tmp);
+
+        if (!(tmp = virXMLPropString(nodes[i], "sizeKiB"))) {
+            virReportError(VIR_ERR_XML_ERROR, "%s", _("missing sizeKiB in cache tune"));
+            goto cleanup;
+        }
+        if (virStrToLong_ull(tmp, NULL, 10, &(bank[i].size)) < 0) {
+            virReportError(VIR_ERR_XML_ERROR,
+                           _("invalid setting for cache sizeKiB '%s'"), tmp);
+            goto cleanup;
+        }
+        /* convert to B */
+        bank[i].size *= 1024;
+        VIR_FREE(tmp);
+
+        if ((tmp = virXMLPropString(nodes[i], "vcpus"))) {
+            if (virBitmapParse(tmp, &bank[i].vcpus, VIR_DOMAIN_CPUMASK_LEN) < 0) {
+                goto cleanup;
+            }
+
+            if (virBitmapIsAllClear(bank[i].vcpus)) {
+                virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                        _("Invalid value of vcpus '%s'"), tmp);
+                goto cleanup;
+            }
+        }
+    }
+
+    def->cachetune.cache_banks = bank;
+    def->cachetune.n_banks = n;
+    return 0;
+
+ cleanup:
+    VIR_FREE(bank);
+    VIR_FREE(tmp);
+    return -1;
+}
 
 /* Parse the XML definition for a iothreadpin
  * and an iothreadspin has the form
@@ -17455,6 +17650,14 @@ virDomainDefParseXML(xmlDocPtr xml,
     if (virXPathBoolean("boolean(./memoryBacking/locked)", ctxt))
         def->mem.locked = true;
 
+    /* Extract dpdk parameters */
+    if ((node = virXPathNode("./dpdk", ctxt))) {
+        if (VIR_ALLOC(def->dpdk) < 0)
+            goto error;
+        if (virDomainDpdkParamsParseXML(node, def->dpdk) < 0)
+            goto error;
+    }
+
     /* Extract blkio cgroup tunables */
     if (virXPathUInt("string(./blkiotune/weight)", ctxt,
                      &def->blkio.weight) < 0)
@@ -17651,6 +17854,17 @@ virDomainDefParseXML(xmlDocPtr xml,
         if (virDomainVcpuPinDefParseXML(def, nodes[i]))
             goto error;
     }
+    VIR_FREE(nodes);
+
+    if ((n = virXPathNodeSet("./cputune/cachetune", ctxt, &nodes)) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("cannot extract cachetune nodes"));
+        goto error;
+    }
+
+    if (n > 0 && virDomainCacheTuneDefParseXML(def, n, nodes) < 0)
+        goto error;
+
     VIR_FREE(nodes);
 
     if ((n = virXPathNodeSet("./cputune/emulatorpin", ctxt, &nodes)) < 0) {
@@ -19720,7 +19934,7 @@ virDomainChannelDefCheckABIStability(virDomainChrDefPtr src,
     return true;
 }
 
-
+#if 0
 static bool
 virDomainConsoleDefCheckABIStability(virDomainChrDefPtr src,
                                      virDomainChrDefPtr dst)
@@ -19738,6 +19952,7 @@ virDomainConsoleDefCheckABIStability(virDomainChrDefPtr src,
 
     return true;
 }
+#endif
 
 
 static bool
@@ -20574,10 +20789,14 @@ virDomainDefCheckABIStabilityFlags(virDomainDefPtr src,
         goto error;
     }
 
+    /* WRS - Disable this check since it is problematic.
+           - Note that disabling this check is not critical since
+             this section is regenerated at destination.
     for (i = 0; i < src->nconsoles; i++)
         if (!virDomainConsoleDefCheckABIStability(src->consoles[i],
                                                   dst->consoles[i]))
             goto error;
+    */
 
     if (src->nhubs != dst->nhubs) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
@@ -24441,6 +24660,28 @@ virDomainSchedulerFormat(virBufferPtr buf,
 }
 
 
+static void
+virDomainCacheTuneDefFormat(virBufferPtr buf,
+                            virDomainCachetunePtr cache)
+{
+    size_t i;
+
+    for (i = 0; i < cache->n_banks; i ++) {
+        virBufferAsprintf(buf, "<cachetune cacheId='%u' type='%s' "
+                               "sizeKiB='%llu'",
+                               cache->cache_banks[i].cache_id,
+                               virCacheTypeToString(cache->cache_banks[i].type),
+                               cache->cache_banks[i].size / 1024);
+
+        if (cache->cache_banks[i].vcpus)
+            virBufferAsprintf(buf, " vcpus='%s'/>\n",
+                    virBitmapFormat(cache->cache_banks[i].vcpus));
+        else
+            virBufferAddLit(buf, "/>\n");
+    }
+}
+
+
 static int
 virDomainCputuneDefFormat(virBufferPtr buf,
                           virDomainDefPtr def)
@@ -24486,6 +24727,9 @@ virDomainCputuneDefFormat(virBufferPtr buf,
         virBufferAsprintf(&childrenBuf, "<iothread_quota>%lld"
                           "</iothread_quota>\n",
                           def->cputune.iothread_quota);
+
+    if (def->cachetune.n_banks)
+        virDomainCacheTuneDefFormat(&childrenBuf, &def->cachetune);
 
     for (i = 0; i < def->maxvcpus; i++) {
         char *cpumask;
@@ -24678,6 +24922,7 @@ virDomainDefFormatInternal(virDomainDefPtr def,
     unsigned char *uuid;
     char uuidstr[VIR_UUID_STRING_BUFLEN];
     const char *type = NULL;
+    char *cpu_list = NULL;
     int n;
     size_t i;
     virBuffer childrenBuf = VIR_BUFFER_INITIALIZER;
@@ -24718,6 +24963,27 @@ virDomainDefFormatInternal(virDomainDefPtr def,
 
     virBufferEscapeString(buf, "<description>%s</description>\n",
                           def->description);
+
+    if (def->dpdk) {
+        virBufferAsprintf(buf, "  <dpdk>\n");
+        if (!(type = virDomainDpdkProcessTypeToString(def->dpdk->process_type))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("unexpected DPDK process type %d"),
+                           def->dpdk->process_type);
+            goto error;
+        }
+        if (!(cpu_list = virBitmapFormat(def->dpdk->cpumask))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("unexpected CPU CPU list"));
+            goto error;
+        }
+        virBufferAsprintf(buf, "    <process type='%s'/>\n", type);
+        virBufferAsprintf(buf, "    <file prefix='%s'/>\n", def->dpdk->file_prefix);
+        virBufferAsprintf(buf, "    <cpu list='%s'/>\n", cpu_list);
+        virBufferAsprintf(buf, "    <memory channels='%u'/>\n", def->dpdk->nchannels);
+        virBufferAsprintf(buf, "  </dpdk>\n");
+        VIR_FREE(cpu_list);
+    }
 
     if (def->metadata) {
         xmlBufferPtr xmlbuf;

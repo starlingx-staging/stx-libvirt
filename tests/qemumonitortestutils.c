@@ -1439,3 +1439,9 @@ qemuMonitorTestGetAgent(qemuMonitorTestPtr test)
 {
     return test->agent;
 }
+
+virDomainObjPtr
+qemuMonitorTestGetDomainObj(qemuMonitorTestPtr test)
+{
+    return test->vm;
+}

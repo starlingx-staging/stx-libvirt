@@ -504,8 +504,11 @@ void qemuMonitorCPUInfoFree(qemuMonitorCPUInfoPtr list,
 int qemuMonitorGetCPUInfo(qemuMonitorPtr mon,
                           qemuMonitorCPUInfoPtr *vcpus,
                           size_t maxvcpus,
-                          bool hotplug);
-virBitmapPtr qemuMonitorGetCpuHalted(qemuMonitorPtr mon, size_t maxvcpus);
+                          bool hotplug,
+                          bool fast);
+virBitmapPtr qemuMonitorGetCpuHalted(qemuMonitorPtr mon,
+                                     size_t maxvcpus,
+                                     bool fast);
 
 int qemuMonitorGetVirtType(qemuMonitorPtr mon,
                            virDomainVirtType *virtType);
@@ -879,7 +882,8 @@ int qemuMonitorArbitraryCommand(qemuMonitorPtr mon,
 int qemuMonitorInjectNMI(qemuMonitorPtr mon);
 
 int qemuMonitorScreendump(qemuMonitorPtr mon,
-                          const char *file);
+                          const char *file,
+                          const char *id);
 
 int qemuMonitorSendKey(qemuMonitorPtr mon,
                        unsigned int holdtime,

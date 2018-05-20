@@ -7,7 +7,6 @@
     type='Broadwell-x86_64-cpu'
     qom_path='/machine/unattached/device[0]'
     topology: socket='0' core='0' thread='0' vcpus='1'
-    halted
 [vcpu libvirt-id='1']
     online=yes
     hotpluggable=yes
@@ -18,7 +17,6 @@
     alias='vcpu1'
     qom_path='/machine/peripheral/vcpu1'
     topology: socket='1' core='0' thread='0' vcpus='1'
-    halted
 [vcpu libvirt-id='2']
     online=yes
     hotpluggable=yes
