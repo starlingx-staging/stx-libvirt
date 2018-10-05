@@ -71,13 +71,13 @@ pull-po: $(POTFILE)
 	$(MAKE) update-gmo
 
 $(POTFILE): POTFILES $(POTFILE_DEPS)
-	$(XGETTEXT) -o $@-t $(XGETTEXT_ARGS) \
+	OMP_THREAD_LIMIT=1 $(XGETTEXT) -o $@-t $(XGETTEXT_ARGS) \
 	  --files-from=$(abs_srcdir)/POTFILES
 	$(SED) $(SED_PO_FIXUP_ARGS) < $@-t > $@
 	rm -f $@-t
 
 $(srcdir)/%.po: $(srcdir)/%.mini.po $(POTFILE)
-	$(MSGMERGE) --no-fuzzy-matching $< $(POTFILE) | \
+	OMP_THREAD_LIMIT=1 $(MSGMERGE) --no-fuzzy-matching $< $(POTFILE) | \
 	  $(SED) $(SED_PO_FIXUP_ARGS) > $@
 
 $(srcdir)/%.gmo: $(srcdir)/%.po
