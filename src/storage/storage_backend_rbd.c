@@ -574,15 +574,14 @@ virStorageBackendRBDRefreshPool(virStoragePoolObjPtr pool)
             if (r == -ENOENT || r == -ETIMEDOUT)
                 continue;
 
-            virStorageVolDefFree(vol);
             goto cleanup;
         }
 
         if (virStoragePoolObjAddVol(pool, vol) < 0) {
-            virStorageVolDefFree(vol);
             virStoragePoolObjClearVols(pool);
             goto cleanup;
         }
+        vol = NULL;
     }
 
     VIR_DEBUG("Found %zu images in RBD pool %s",

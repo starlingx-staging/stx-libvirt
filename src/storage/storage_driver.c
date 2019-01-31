@@ -1830,8 +1830,8 @@ storageVolCreateXML(virStoragePoolPtr pool,
     virStoragePoolObjPtr obj;
     virStoragePoolDefPtr def;
     virStorageBackendPtr backend;
-    virStorageVolDefPtr voldef = NULL;
     virStorageVolPtr vol = NULL, newvol = NULL;
+    VIR_AUTOPTR(virStorageVolDef) voldef = NULL;
 
     virCheckFlags(VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA, NULL);
 
@@ -1952,7 +1952,6 @@ storageVolCreateXML(virStoragePoolPtr pool,
 
  cleanup:
     virObjectUnref(newvol);
-    virStorageVolDefFree(voldef);
     virStoragePoolObjEndAPI(&obj);
     return vol;
 }
@@ -1968,11 +1967,11 @@ storageVolCreateXMLFrom(virStoragePoolPtr pool,
     virStoragePoolObjPtr objsrc = NULL;
     virStorageBackendPtr backend;
     virStorageVolDefPtr voldefsrc = NULL;
-    virStorageVolDefPtr voldef = NULL;
     virStorageVolDefPtr shadowvol = NULL;
     virStorageVolPtr newvol = NULL;
     virStorageVolPtr vol = NULL;
     int buildret;
+    VIR_AUTOPTR(virStorageVolDef) voldef = NULL;
 
     virCheckFlags(VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA |
                   VIR_STORAGE_VOL_CREATE_REFLINK,
@@ -2146,7 +2145,6 @@ storageVolCreateXMLFrom(virStoragePoolPtr pool,
 
  cleanup:
     virObjectUnref(newvol);
-    virStorageVolDefFree(voldef);
     VIR_FREE(shadowvol);
     virStoragePoolObjEndAPI(&obj);
     virStoragePoolObjEndAPI(&objsrc);
