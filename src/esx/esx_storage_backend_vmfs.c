@@ -838,7 +838,6 @@ esxStorageVolCreateXML(virStoragePoolPtr pool,
     virStorageVolPtr volume = NULL;
     esxPrivate *priv = pool->conn->privateData;
     virStoragePoolDef poolDef;
-    virStorageVolDefPtr def = NULL;
     char *tmp;
     char *unescapedDatastorePath = NULL;
     char *unescapedDirectoryName = NULL;
@@ -854,6 +853,7 @@ esxStorageVolCreateXML(virStoragePoolPtr pool,
     char *taskInfoErrorMessage = NULL;
     char *uuid_string = NULL;
     char *key = NULL;
+    VIR_AUTOPTR(virStorageVolDef) def = NULL;
 
     virCheckFlags(0, NULL);
 
@@ -1026,7 +1026,6 @@ esxStorageVolCreateXML(virStoragePoolPtr pool,
         virtualDiskSpec->adapterType = NULL;
     }
 
-    virStorageVolDefFree(def);
     VIR_FREE(unescapedDatastorePath);
     VIR_FREE(unescapedDirectoryName);
     VIR_FREE(unescapedDirectoryAndFileName);
@@ -1056,7 +1055,6 @@ esxStorageVolCreateXMLFrom(virStoragePoolPtr pool,
     esxPrivate *priv = pool->conn->privateData;
     virStoragePoolDef poolDef;
     char *sourceDatastorePath = NULL;
-    virStorageVolDefPtr def = NULL;
     char *tmp;
     char *unescapedDatastorePath = NULL;
     char *unescapedDirectoryName = NULL;
@@ -1071,6 +1069,7 @@ esxStorageVolCreateXMLFrom(virStoragePoolPtr pool,
     char *taskInfoErrorMessage = NULL;
     char *uuid_string = NULL;
     char *key = NULL;
+    VIR_AUTOPTR(virStorageVolDef) def = NULL;
 
     virCheckFlags(0, NULL);
 
@@ -1209,7 +1208,6 @@ esxStorageVolCreateXMLFrom(virStoragePoolPtr pool,
 
  cleanup:
     VIR_FREE(sourceDatastorePath);
-    virStorageVolDefFree(def);
     VIR_FREE(unescapedDatastorePath);
     VIR_FREE(unescapedDirectoryName);
     VIR_FREE(unescapedDirectoryAndFileName);

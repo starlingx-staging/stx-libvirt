@@ -402,7 +402,6 @@ vboxStorageVolCreateXML(virStoragePoolPtr pool,
                         const char *xml, unsigned int flags)
 {
     vboxDriverPtr data = pool->conn->privateData;
-    virStorageVolDefPtr def = NULL;
     PRUnichar *hddFormatUtf16 = NULL;
     PRUnichar *hddNameUtf16 = NULL;
     virStoragePoolDef poolDef;
@@ -416,6 +415,7 @@ vboxStorageVolCreateXML(virStoragePoolPtr pool,
     PRUint32 variant = HardDiskVariant_Standard;
     resultCodeUnion resultCode;
     virStorageVolPtr ret = NULL;
+    VIR_AUTOPTR(virStorageVolDef) def = NULL;
 
     if (!data->vboxObj)
         return ret;
@@ -502,7 +502,6 @@ vboxStorageVolCreateXML(virStoragePoolPtr pool,
     VBOX_RELEASE(progress);
     VBOX_UTF16_FREE(hddFormatUtf16);
     VBOX_UTF16_FREE(hddNameUtf16);
-    virStorageVolDefFree(def);
     return ret;
 }
 
